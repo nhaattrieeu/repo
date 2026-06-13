@@ -1,8 +1,11 @@
 import 'dart:async';
+import 'dart:io';
+import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../constants/ble_constants.dart';
 import '../protocol/lightstick_protocol.dart';
+import '../models/lightstick_color.dart';
 
 /// Connection state enum
 enum LightstickConnectionState {
@@ -35,6 +38,14 @@ class BleService extends ChangeNotifier {
   StreamSubscription<BluetoothConnectionState>? _connectionSubscription;
   StreamSubscription<List<int>>? _notificationSubscription;
 
+  // Effects State
+  bool _isAutoRandom = false;
+  bool _isSequentialCycle = false;
+  int _sequentialIndex = 0;
+  int _blinkSpeedMs = 0; // 0 = solid, 500 = slow, 150 = fast
+  Timer? _effectTimer;
+  bool _blinkStateOn = false;
+
   // ==================== GETTERS ====================
 
   LightstickConnectionState get connectionState => _connectionState;
@@ -43,6 +54,9 @@ class BleService extends ChangeNotifier {
   int? get batteryLevel => _batteryLevel;
   int get currentColorId => _currentColorId;
   bool get isLedOn => _ledOn;
+  bool get isAutoRandom => _isAutoRandom;
+  bool get isSequentialCycle => _isSequentialCycle;
+  int get blinkSpeedMs => _blinkSpeedMs;
   String get statusMessage => _statusMessage;
   String? get lastError => _lastError;
   List<ScanResult> get scanResults => List.unmodifiable(_scanResults);
@@ -162,6 +176,11 @@ class BleService extends ChangeNotifier {
       _statusMessage = 'Đang tìm dịch vụ BLE...';
       notifyListeners();
 
+      // Delay for Android GATT to settle
+      if (!kIsWeb && Platform.isAndroid) {
+        await Future.delayed(const Duration(milliseconds: 500));
+      }
+
       // Discover services
       final services = await device.discoverServices();
 
@@ -180,6 +199,12 @@ class BleService extends ChangeNotifier {
         _connectionState = LightstickConnectionState.error;
         _statusMessage = _lastError!;
         notifyListeners();
+        
+        debugPrint('--- DISCOVERED SERVICES ---');
+        for (final s in services) {
+          debugPrint('Service: ${s.uuid}');
+        }
+        
         await device.disconnect();
         return false;
       }
@@ -187,32 +212,64 @@ class BleService extends ChangeNotifier {
       // Find RX and TX characteristics
       for (final c in uartService.characteristics) {
         final uuid = c.uuid.toString().toLowerCase();
-        if (uuid == BleConstants.rxCharUuid.toLowerCase()) {
+        debugPrint('Found characteristic: $uuid'); // log for debugging
+        if (uuid.contains('92a4')) {
           _rxCharacteristic = c;
-        } else if (uuid == BleConstants.txCharUuid.toLowerCase()) {
+        } else if (uuid.contains('92a5')) {
           _txCharacteristic = c;
         }
       }
 
-      if (_rxCharacteristic == null || _txCharacteristic == null) {
-        _lastError = 'Không tìm thấy RX/TX characteristics.';
+      if (_rxCharacteristic == null) {
+        _lastError = 'Không tìm thấy Write characteristic (92a4).';
         _connectionState = LightstickConnectionState.error;
         _statusMessage = _lastError!;
         notifyListeners();
+        
+        debugPrint('--- DISCOVERED CHARACTERISTICS FOR UART ---');
+        for (final c in uartService.characteristics) {
+          debugPrint('Char: ${c.uuid} - props: ${c.properties}');
+        }
+        
         await device.disconnect();
         return false;
       }
 
-      // Enable TX notification (CRITICAL - must be done BEFORE sending commands)
-      await _txCharacteristic!.setNotifyValue(true);
-      _notificationSubscription?.cancel();
-      _notificationSubscription =
-          _txCharacteristic!.onValueReceived.listen(_handleNotification);
+      // Try to enable TX notification (optional - like the web version)
+      if (_txCharacteristic != null) {
+        try {
+          await _txCharacteristic!.setNotifyValue(true);
+          _notificationSubscription?.cancel();
+          _notificationSubscription =
+              _txCharacteristic!.onValueReceived.listen(_handleNotification);
+          debugPrint('TX notification enabled successfully');
+        } catch (e) {
+          debugPrint('TX notification skipped (will retry after auth): $e');
+          // Not fatal - we'll retry after sending auth command
+        }
+      }
 
       _connectionState = LightstickConnectionState.connected;
       _statusMessage =
           'Đã kết nối ${device.platformName}';
       notifyListeners();
+
+      // Send auth/unlock command first (like pressing "MỞ KHÓA BẢO MẬT" in web version)
+      await Future.delayed(BleConstants.commandDelay);
+      await sendAuth();
+
+      // Retry TX notification after auth (device may allow it now)
+      if (_txCharacteristic != null && _notificationSubscription == null) {
+        try {
+          await Future.delayed(const Duration(milliseconds: 300));
+          await _txCharacteristic!.setNotifyValue(true);
+          _notificationSubscription =
+              _txCharacteristic!.onValueReceived.listen(_handleNotification);
+          debugPrint('TX notification enabled after auth');
+        } catch (e) {
+          debugPrint('TX notification still unavailable after auth: $e');
+        }
+      }
 
       // Read firmware version
       await Future.delayed(BleConstants.commandDelay);
@@ -245,6 +302,7 @@ class BleService extends ChangeNotifier {
   void _handleDisconnect() {
     _notificationSubscription?.cancel();
     _connectionSubscription?.cancel();
+    _effectTimer?.cancel();
     _connectedDevice = null;
     _rxCharacteristic = null;
     _txCharacteristic = null;
@@ -252,6 +310,8 @@ class BleService extends ChangeNotifier {
     _batteryLevel = null;
     _ledOn = false;
     _currentColorId = -1;
+    _isAutoRandom = false;
+    _blinkSpeedMs = 0;
     _connectionState = LightstickConnectionState.disconnected;
     _statusMessage = 'Đã ngắt kết nối';
     notifyListeners();
@@ -301,23 +361,151 @@ class BleService extends ChangeNotifier {
     await _rxCharacteristic!.write(data, withoutResponse: false);
   }
 
-  /// Turn LED on with a specific color ID
-  Future<void> sendLedOn(int colorId) async {
-    await _sendCommand(LightstickProtocol.ledOn(colorId));
-    _currentColorId = colorId;
-    _ledOn = true;
-    _statusMessage = 'LED bật - Color ID: $colorId';
+  /// Send auth/unlock command (same as "MỞ KHÓA BẢO MẬT" in web version)
+  /// This must be sent first after connection before other commands work.
+  Future<void> sendAuth() async {
+    await _sendCommand(LightstickProtocol.registerPin());
+    _statusMessage = 'Đã gửi lệnh mở khóa';
     notifyListeners();
   }
 
+  /// Turn LED on with a specific color ID
+  Future<void> sendLedOn(int colorId, {bool isInternal = false}) async {
+    await _sendCommand(LightstickProtocol.ledOn(colorId));
+    if (!isInternal) {
+      _currentColorId = colorId;
+      _ledOn = true;
+      _statusMessage = 'LED bật - Color ID: $colorId';
+      notifyListeners();
+    }
+  }
+
   /// Turn LED off
-  Future<void> sendLedOff() async {
+  Future<void> sendLedOff({bool isInternal = false}) async {
     await _sendCommand(LightstickProtocol.ledOff());
-    _ledOn = false;
-    _currentColorId = -1;
-    _statusMessage = 'LED tắt';
+    if (!isInternal) {
+      _ledOn = false;
+      _currentColorId = -1;
+      _statusMessage = 'LED tắt';
+      notifyListeners();
+    }
+  }
+
+  // ==================== EFFECTS (RANDOM & BLINK) ====================
+
+  void setStaticColor(int colorId) {
+    _isAutoRandom = false;
+    _currentColorId = colorId;
+    _ledOn = true;
+    _restartEffectTimer();
     notifyListeners();
   }
+
+  void setAutoRandom(bool isAuto) {
+    _isAutoRandom = isAuto;
+    _isSequentialCycle = false;
+    if (isAuto) _ledOn = true;
+    _restartEffectTimer();
+    notifyListeners();
+  }
+
+  void setSequentialCycle(bool isOn) {
+    _isSequentialCycle = isOn;
+    _isAutoRandom = false;
+    _sequentialIndex = 0;
+    if (isOn) _ledOn = true;
+    _restartEffectTimer();
+    notifyListeners();
+  }
+
+  void setBlinkSpeed(int speedMs) {
+    _blinkSpeedMs = speedMs;
+    _restartEffectTimer();
+    notifyListeners();
+  }
+  
+  void turnOffAll() {
+    _effectTimer?.cancel();
+    _isAutoRandom = false;
+    _isSequentialCycle = false;
+    _blinkSpeedMs = 0;
+    sendLedOff();
+  }
+
+  void _restartEffectTimer() {
+    _effectTimer?.cancel();
+    _effectTimer = null;
+    
+    // Solid color (not blinking, not random, not sequential)
+    if (_blinkSpeedMs == 0 && !_isAutoRandom && !_isSequentialCycle) {
+      if (_currentColorId >= 0) {
+        sendLedOn(_currentColorId);
+      }
+      return;
+    }
+    
+    // Blinking or Random
+    int interval = _blinkSpeedMs > 0 ? _blinkSpeedMs : 1000; 
+    
+    _blinkStateOn = true;
+    _effectTimer = Timer.periodic(Duration(milliseconds: interval), (timer) {
+      _tickEffect();
+    });
+    
+    _tickEffect();
+  }
+
+  void _tickEffect() {
+    if (_isSequentialCycle) {
+      final colors = wannaOneColors.where((c) => c.id >= 0x01 && c.id <= 0x1B).toList();
+      if (colors.isEmpty) return;
+      if (_blinkSpeedMs == 0) {
+        _sequentialIndex = _sequentialIndex % colors.length;
+        _currentColorId = colors[_sequentialIndex].id;
+        sendLedOn(_currentColorId, isInternal: true);
+        _statusMessage = 'Chạy lần lượt - ${colors[_sequentialIndex].name} (${_sequentialIndex + 1}/${colors.length})';
+        _sequentialIndex++;
+        notifyListeners();
+      } else {
+        if (_blinkStateOn) {
+           _sequentialIndex = _sequentialIndex % colors.length;
+           _currentColorId = colors[_sequentialIndex].id;
+           sendLedOn(_currentColorId, isInternal: true);
+           _statusMessage = 'Chạy lần lượt - ${colors[_sequentialIndex].name} (${_sequentialIndex + 1}/${colors.length})';
+           _sequentialIndex++;
+           notifyListeners();
+        } else {
+           sendLedOff(isInternal: true);
+        }
+        _blinkStateOn = !_blinkStateOn;
+      }
+    } else if (_isAutoRandom) {
+      if (_blinkSpeedMs == 0) {
+        _currentColorId = wannaOneColors[Random().nextInt(wannaOneColors.length)].id;
+        sendLedOn(_currentColorId, isInternal: true);
+        _statusMessage = 'Auto Random - Color ID: $_currentColorId';
+        notifyListeners();
+      } else {
+        if (_blinkStateOn) {
+           _currentColorId = wannaOneColors[Random().nextInt(wannaOneColors.length)].id;
+           sendLedOn(_currentColorId, isInternal: true);
+        } else {
+           sendLedOff(isInternal: true);
+        }
+        _blinkStateOn = !_blinkStateOn;
+      }
+    } else {
+      // Blinking static color
+      if (_blinkStateOn) {
+         sendLedOn(_currentColorId, isInternal: true);
+      } else {
+         sendLedOff(isInternal: true);
+      }
+      _blinkStateOn = !_blinkStateOn;
+    }
+  }
+
+  // ==================== OTHER COMMANDS ====================
 
   /// Request battery level
   Future<void> requestBattery() async {
@@ -341,6 +529,7 @@ class BleService extends ChangeNotifier {
     _scanSubscription?.cancel();
     _connectionSubscription?.cancel();
     _notificationSubscription?.cancel();
+    _effectTimer?.cancel();
     super.dispose();
   }
 }

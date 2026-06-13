@@ -20,7 +20,7 @@ class LightstickApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Light Stick Controller',
+      title: 'Make Color',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,

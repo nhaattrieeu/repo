@@ -1,6 +1,7 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
 import '../constants/ble_constants.dart';
+import '../models/lightstick_color.dart';
 import '../services/ble_service.dart';
 
 class ControlScreen extends StatefulWidget {
@@ -15,7 +16,6 @@ class _ControlScreenState extends State<ControlScreen>
     with TickerProviderStateMixin {
   late AnimationController _glowController;
   late AnimationController _colorChangeController;
-  bool _showExperimental = false;
   int? _testingColorId;
 
   BleService get ble => widget.bleService;
@@ -56,14 +56,14 @@ class _ControlScreenState extends State<ControlScreen>
 
   Future<void> _onColorTap(LightstickColor lc) async {
     setState(() => _testingColorId = lc.id);
-    await ble.sendLedOn(lc.id);
+    ble.setStaticColor(lc.id);
     _colorChangeController.forward(from: 0);
     await Future.delayed(const Duration(milliseconds: 200));
     if (mounted) setState(() => _testingColorId = null);
   }
 
-  Future<void> _onLedOff() async {
-    await ble.sendLedOff();
+  void _onLedOff() {
+    ble.turnOffAll();
     _colorChangeController.forward(from: 0);
   }
 
@@ -71,11 +71,7 @@ class _ControlScreenState extends State<ControlScreen>
     if (!ble.isLedOn || ble.currentColorId < 0) {
       return const Color(0xFF2D3436);
     }
-    // Try to find in known colors
-    for (final c in LightstickColor.knownColors) {
-      if (c.id == ble.currentColorId) return c.color;
-    }
-    for (final c in LightstickColor.experimentalColors) {
+    for (final c in wannaOneColors) {
       if (c.id == ble.currentColorId) return c.color;
     }
     return const Color(0xFFDFE6E9);
@@ -99,21 +95,9 @@ class _ControlScreenState extends State<ControlScreen>
                     const SizedBox(height: 24),
                     _buildInfoCards(),
                     const SizedBox(height: 24),
-                    _buildColorSection(
-                      'Màu cơ bản',
-                      LightstickColor.knownColors,
-                      true,
-                    ),
-                    const SizedBox(height: 20),
-                    _buildExperimentalToggle(),
-                    if (_showExperimental) ...[
-                      const SizedBox(height: 16),
-                      _buildColorSection(
-                        'Thử nghiệm',
-                        LightstickColor.experimentalColors,
-                        false,
-                      ),
-                    ],
+                    _buildEffectControls(),
+                    const SizedBox(height: 24),
+                    _buildColorSection(),
                     const SizedBox(height: 24),
                     _buildActionButtons(),
                     const SizedBox(height: 32),
@@ -399,47 +383,151 @@ class _ControlScreenState extends State<ControlScreen>
 
   // ==================== COLOR SECTION ====================
 
-  Widget _buildColorSection(
-      String title, List<LightstickColor> colors, bool isKnown) {
+  // ==================== EFFECTS SECTION ====================
+
+  Widget _buildEffectControls() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Padding(
-          padding: const EdgeInsets.only(left: 4, bottom: 12),
+        const Text(
+          'Hiệu ứng',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 15,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: GestureDetector(
+                onTap: () => ble.setBlinkSpeed(0),
+                child: _buildEffectButton('Sáng tĩnh', ble.blinkSpeedMs == 0),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: GestureDetector(
+                onTap: () => ble.setBlinkSpeed(500),
+                child: _buildEffectButton('Nháy chậm', ble.blinkSpeedMs == 500),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: GestureDetector(
+                onTap: () => ble.setBlinkSpeed(150),
+                child: _buildEffectButton('Nháy nhanh', ble.blinkSpeedMs == 150),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        // Random toggle
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            color: const Color(0xFF1A1F3D),
+            border: Border.all(
+              color: ble.isAutoRandom ? const Color(0xFF00B894) : const Color(0xFF2D3154),
+            ),
+          ),
           child: Row(
             children: [
-              Text(
-                title,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w700,
-                ),
+              Icon(Icons.shuffle, color: ble.isAutoRandom ? const Color(0xFF00B894) : const Color(0xFF8899AA)),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Text('Tự động Random', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w500)),
               ),
-              if (!isKnown)
-                Container(
-                  margin: const EdgeInsets.only(left: 8),
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFDAA5E).withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: const Text(
-                    'Chưa xác nhận',
-                    style: TextStyle(
-                      color: Color(0xFFFDAA5E),
-                      fontSize: 10,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
+              Switch(
+                value: ble.isAutoRandom,
+                onChanged: (val) => ble.setAutoRandom(val),
+                activeColor: const Color(0xFF00B894),
+              ),
             ],
           ),
         ),
-        Wrap(
-          spacing: 10,
-          runSpacing: 10,
-          children: colors.map((lc) => _buildColorButton(lc)).toList(),
+        const SizedBox(height: 12),
+        // Sequential cycle toggle
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            color: const Color(0xFF1A1F3D),
+            border: Border.all(
+              color: ble.isSequentialCycle ? const Color(0xFF00B894) : const Color(0xFF2D3154),
+            ),
+          ),
+          child: Row(
+            children: [
+              Icon(Icons.palette, color: ble.isSequentialCycle ? const Color(0xFF00B894) : const Color(0xFF8899AA)),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Text('Chạy màu lần lượt', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w500)),
+              ),
+              Switch(
+                value: ble.isSequentialCycle,
+                onChanged: (val) => ble.setSequentialCycle(val),
+                activeColor: const Color(0xFF00B894),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildEffectButton(String label, bool isActive) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 10),
+      decoration: BoxDecoration(
+        color: isActive ? const Color(0xFF6C5CE7).withValues(alpha: 0.2) : const Color(0xFF1A1F3D),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: isActive ? const Color(0xFF6C5CE7) : const Color(0xFF2D3154)),
+      ),
+      alignment: Alignment.center,
+      child: Text(
+        label,
+        style: TextStyle(
+          color: isActive ? const Color(0xFF6C5CE7) : const Color(0xFF8899AA),
+          fontSize: 12,
+          fontWeight: isActive ? FontWeight.w600 : FontWeight.w500,
+        ),
+      ),
+    );
+  }
+
+  // ==================== COLOR SECTION ====================
+
+  Widget _buildColorSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Padding(
+          padding: EdgeInsets.only(left: 4, bottom: 12),
+          child: Text(
+            'Bảng dải màu (28 màu)',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+        GridView.builder(
+          physics: const NeverScrollableScrollPhysics(),
+          shrinkWrap: true,
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 4,
+            childAspectRatio: 0.85,
+            crossAxisSpacing: 10,
+            mainAxisSpacing: 10,
+          ),
+          itemCount: wannaOneColors.length,
+          itemBuilder: (context, index) {
+            return _buildColorButton(wannaOneColors[index]);
+          },
         ),
       ],
     );
@@ -511,53 +599,6 @@ class _ControlScreenState extends State<ControlScreen>
     );
   }
 
-  // ==================== EXPERIMENTAL TOGGLE ====================
-
-  Widget _buildExperimentalToggle() {
-    return GestureDetector(
-      onTap: () => setState(() => _showExperimental = !_showExperimental),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(14),
-          color: const Color(0xFF1A1F3D),
-          border: Border.all(color: const Color(0xFF2D3154)),
-        ),
-        child: Row(
-          children: [
-            Icon(
-              _showExperimental
-                  ? Icons.science
-                  : Icons.science_outlined,
-              color: const Color(0xFFFDAA5E),
-              size: 20,
-            ),
-            const SizedBox(width: 10),
-            const Expanded(
-              child: Text(
-                'Màu thử nghiệm (chưa xác nhận)',
-                style: TextStyle(
-                  color: Color(0xFFFDAA5E),
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ),
-            AnimatedRotation(
-              turns: _showExperimental ? 0.5 : 0.0,
-              duration: const Duration(milliseconds: 200),
-              child: const Icon(
-                Icons.keyboard_arrow_down,
-                color: Color(0xFFFDAA5E),
-                size: 20,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   // ==================== ACTION BUTTONS ====================
 
   Widget _buildActionButtons() {
@@ -608,71 +649,38 @@ class _ControlScreenState extends State<ControlScreen>
           ),
         ),
         const SizedBox(height: 12),
-        // Secondary buttons row
-        Row(
-          children: [
-            Expanded(
-              child: _buildSecondaryButton(
-                icon: Icons.battery_std,
-                label: 'Đọc pin',
-                onTap: () => ble.requestBattery(),
+        SizedBox(
+          width: double.infinity,
+          height: 52,
+          child: ElevatedButton(
+            onPressed: ble.isConnected ? () => _showResetConfirm() : null,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.transparent,
+              disabledBackgroundColor: const Color(0xFF1A1F3D),
+              shadowColor: Colors.transparent,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(14),
+                side: const BorderSide(color: Color(0xFF2D3154)),
               ),
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _buildSecondaryButton(
-                icon: Icons.refresh,
-                label: 'Đọc FW',
-                onTap: () => ble.requestFirmwareVersion(),
-              ),
+            child: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.restart_alt, color: Color(0xFFFF6B6B)),
+                SizedBox(width: 8),
+                Text(
+                  'Reset',
+                  style: TextStyle(
+                    color: Color(0xFFFF6B6B),
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: _buildSecondaryButton(
-                icon: Icons.restart_alt,
-                label: 'Reset',
-                onTap: () => _showResetConfirm(),
-                isDestructive: true,
-              ),
-            ),
-          ],
+          ),
         ),
       ],
-    );
-  }
-
-  Widget _buildSecondaryButton({
-    required IconData icon,
-    required String label,
-    required VoidCallback onTap,
-    bool isDestructive = false,
-  }) {
-    final color =
-        isDestructive ? const Color(0xFFFF6B6B) : const Color(0xFF6C5CE7);
-    return GestureDetector(
-      onTap: ble.isConnected ? onTap : null,
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 12),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(14),
-          color: const Color(0xFF1A1F3D),
-          border: Border.all(color: const Color(0xFF2D3154)),
-        ),
-        child: Column(
-          children: [
-            Icon(icon, color: color, size: 22),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              style: TextStyle(
-                color: color,
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 
