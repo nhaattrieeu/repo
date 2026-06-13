@@ -68,7 +68,7 @@ class _ControlScreenState extends State<ControlScreen>
   }
 
   Color _getCurrentDisplayColor() {
-    if (!ble.isLedOn || ble.currentColorId < 0) {
+    if (!ble.isVisualLedOn || ble.currentColorId < 0) {
       return const Color(0xFF2D3436);
     }
     for (final c in wannaOneColors) {
@@ -190,13 +190,14 @@ class _ControlScreenState extends State<ControlScreen>
 
   Widget _buildLightStickVisual() {
     final displayColor = _getCurrentDisplayColor();
-    final isOn = ble.isLedOn;
+    final isOn = ble.isVisualLedOn;
 
     return AnimatedBuilder(
       animation: _glowController,
       builder: (context, child) {
         final glowAmount = isOn ? 0.3 + _glowController.value * 0.4 : 0.0;
-        return Container(
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 100),
           height: 200,
           width: double.infinity,
           decoration: BoxDecoration(
@@ -242,7 +243,7 @@ class _ControlScreenState extends State<ControlScreen>
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   AnimatedContainer(
-                    duration: const Duration(milliseconds: 300),
+                    duration: const Duration(milliseconds: 100),
                     padding: const EdgeInsets.all(20),
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
@@ -266,7 +267,7 @@ class _ControlScreenState extends State<ControlScreen>
                   ),
                   const SizedBox(height: 12),
                   AnimatedDefaultTextStyle(
-                    duration: const Duration(milliseconds: 300),
+                    duration: const Duration(milliseconds: 100),
                     style: TextStyle(
                       color: isOn ? displayColor : const Color(0xFF636E72),
                       fontSize: 16,

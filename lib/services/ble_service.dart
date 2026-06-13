@@ -54,6 +54,12 @@ class BleService extends ChangeNotifier {
   int? get batteryLevel => _batteryLevel;
   int get currentColorId => _currentColorId;
   bool get isLedOn => _ledOn;
+  bool get isVisualLedOn {
+    if (_effectTimer != null && _blinkSpeedMs > 0) {
+      return !_blinkStateOn;
+    }
+    return _ledOn;
+  }
   bool get isAutoRandom => _isAutoRandom;
   bool get isSequentialCycle => _isSequentialCycle;
   int get blinkSpeedMs => _blinkSpeedMs;
@@ -465,7 +471,6 @@ class BleService extends ChangeNotifier {
         sendLedOn(_currentColorId, isInternal: true);
         _statusMessage = 'Chạy lần lượt - ${colors[_sequentialIndex].name} (${_sequentialIndex + 1}/${colors.length})';
         _sequentialIndex++;
-        notifyListeners();
       } else {
         if (_blinkStateOn) {
            _sequentialIndex = _sequentialIndex % colors.length;
@@ -473,7 +478,6 @@ class BleService extends ChangeNotifier {
            sendLedOn(_currentColorId, isInternal: true);
            _statusMessage = 'Chạy lần lượt - ${colors[_sequentialIndex].name} (${_sequentialIndex + 1}/${colors.length})';
            _sequentialIndex++;
-           notifyListeners();
         } else {
            sendLedOff(isInternal: true);
         }
@@ -484,7 +488,6 @@ class BleService extends ChangeNotifier {
         _currentColorId = wannaOneColors[Random().nextInt(wannaOneColors.length)].id;
         sendLedOn(_currentColorId, isInternal: true);
         _statusMessage = 'Auto Random - Color ID: $_currentColorId';
-        notifyListeners();
       } else {
         if (_blinkStateOn) {
            _currentColorId = wannaOneColors[Random().nextInt(wannaOneColors.length)].id;
@@ -503,6 +506,8 @@ class BleService extends ChangeNotifier {
       }
       _blinkStateOn = !_blinkStateOn;
     }
+    
+    notifyListeners();
   }
 
   // ==================== OTHER COMMANDS ====================
