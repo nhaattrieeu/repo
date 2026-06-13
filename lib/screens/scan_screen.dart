@@ -149,7 +149,7 @@ class _ScanScreenState extends State<ScanScreen> with TickerProviderStateMixin {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'WANNAONE Light Stick',
+                  'Make Color',
                   style: TextStyle(
                     color: Colors.white,
                     fontSize: 20,
