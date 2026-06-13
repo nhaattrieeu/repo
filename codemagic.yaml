@@ -38,11 +38,3 @@ workflows:
           
     artifacts:
       - build/ios/iphoneos/app-unsigned.ipa
-    publishing:
-      email:
-        recipients:
-          # Bạn có thể điền email của bạn vào đây để Codemagic gửi file IPA khi build xong
-          # - user@example.com
-        notify:
-          success: true
-          failure: false
