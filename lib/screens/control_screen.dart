@@ -93,8 +93,6 @@ class _ControlScreenState extends State<ControlScreen>
                     const SizedBox(height: 8),
                     _buildLightStickVisual(),
                     const SizedBox(height: 24),
-                    _buildInfoCards(),
-                    const SizedBox(height: 24),
                     _buildEffectControls(),
                     const SizedBox(height: 24),
                     _buildColorSection(),
