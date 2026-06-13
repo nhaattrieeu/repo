@@ -17,7 +17,6 @@ workflows:
       - name: Install dependencies
         script: |
           flutter pub get
-          cd ios && pod install
           
       - name: Build unsigned iOS app
         script: |
