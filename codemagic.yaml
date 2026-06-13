@@ -1,0 +1,48 @@
+workflows:
+  ios-sideload-build:
+    name: Build Unsigned iOS IPA for Sideloading
+    instance_type: mac_mini_m1
+    environment:
+      flutter: stable
+      xcode: latest
+      cocoapods: default
+    scripts:
+      - name: Set up code signing settings to none
+        script: |
+          # Dừng Xcode cố gắng tìm kiếm profile
+          sed -i '' 's/CODE_SIGN_IDENTITY = "Apple Development";/CODE_SIGN_IDENTITY = "";/g' ios/Runner.xcodeproj/project.pbxproj
+          sed -i '' 's/CODE_SIGNING_REQUIRED = YES;/CODE_SIGNING_REQUIRED = NO;/g' ios/Runner.xcodeproj/project.pbxproj
+          sed -i '' 's/CODE_SIGNING_ALLOWED = YES;/CODE_SIGNING_ALLOWED = NO;/g' ios/Runner.xcodeproj/project.pbxproj
+          
+      - name: Install dependencies
+        script: |
+          flutter pub get
+          cd ios && pod install
+          
+      - name: Build unsigned iOS app
+        script: |
+          # Build Flutter iOS không cần chứng chỉ (no codesign)
+          flutter build ios --release --no-codesign
+          
+      - name: Package into IPA format
+        script: |
+          # Tạo thư mục Payload (định dạng chuẩn của file IPA)
+          mkdir -p build/ios/iphoneos/Payload
+          
+          # Copy app đã build vào thư mục Payload
+          cp -r build/ios/iphoneos/Runner.app build/ios/iphoneos/Payload/
+          
+          # Nén thành file .ipa
+          cd build/ios/iphoneos
+          zip -qr app-unsigned.ipa Payload
+          
+    artifacts:
+      - build/ios/iphoneos/app-unsigned.ipa
+    publishing:
+      email:
+        recipients:
+          # Bạn có thể điền email của bạn vào đây để Codemagic gửi file IPA khi build xong
+          # - user@example.com
+        notify:
+          success: true
+          failure: false
