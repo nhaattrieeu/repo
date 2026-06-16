@@ -80,11 +80,10 @@ class _SplashScreenState extends State<SplashScreen> {
 
       // Check users list
       final usersResponse = await http.get(Uri.parse(
-          'https://raw.githubusercontent.com/nhaattrieeu/temp_storage/main/users.json'));
+          'https://raw.githubusercontent.com/nhaattrieeu/temp_storage/refs/heads/main/users'));
       if (usersResponse.statusCode == 200) {
         final List<dynamic> users = jsonDecode(usersResponse.body);
         final usersList = users.map((e) => e.toString().trim()).toList();
-
         if (usersList.contains(deviceUuid)) {
           _navigateToApp();
           return;
