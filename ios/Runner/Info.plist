@@ -74,5 +74,9 @@
 	<string>Ứng dụng cần quyền Bluetooth để quét, kết nối và điều khiển WANNAONE Light Stick.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Ứng dụng cần quyền Vị trí để có thể tìm kiếm thiết bị Bluetooth (yêu cầu của hệ điều hành).</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>bluetooth-central</string>
+	</array>
 </dict>
 </plist>
